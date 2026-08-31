@@ -418,6 +418,602 @@ const TIMES = ['9:00–9:55','9:55–10:50','11:05–12:00','12:00–12:55','1:4
 
 // groups: A = slots 1-2, break(TEA), B = slots 3-4, break(LUNCH), C = slots 5-7
 const DAYS = [
+  {name:'Monday', short:'Mon', A:[{s:1,k:'free'},{s:1,k:'ml'}],            B:[{s:2,k:'cc-lab'}],                C:[{s:2,k:'placement'},{s:1,k:'free'}]},
+  {name:'Tuesday',short:'Tue', A:[{s:2,k:'sta-tut'}],                      B:[{s:1,k:'spm'},{s:1,k:'ml'}],       C:[{s:3,k:'free'}]},
+  {name:'Wednesday',short:'Wed',A:[{s:1,k:'ml'},{s:1,k:'spm'}],            B:[{s:2,k:'cc-tut'}],                 C:[{s:2,k:'placement'},{s:1,k:'free'}]},
+  {name:'Thursday',short:'Thu',A:[{s:2,k:'free'}],                        B:[{s:1,k:'free'},{s:1,k:'spm'}],     C:[{s:2,k:'sta-lab'},{s:1,k:'free'}]},
+  {name:'Friday', short:'Fri', A:[{s:2,k:'cc-lab'}],                       B:[{s:2,k:'sta'}],                    C:[{s:3,k:'free'}]},
+  {name:'Saturday',short:'Sat',A:[{s:2,k:'ml-lab'}],                       B:[{s:2,k:'project'}],                C:[{s:3,k:'free'}]},
+];
+
+const todayIdx = new Date().getDay(); // 0 Sun ... 6 Sat
+const todayStr = new Date().toISOString().slice(0,10);
+const dayOfWeekShort = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][todayIdx];
+
+function buildGrid(){
+  const table = document.getElementById('grid');
+  let thead = '<tr><th>Day</th>';
+  ['9:00\n9:55','9:55\n10:50'].forEach(()=>{});
+  const headers = [
+    {t:TIMES[0],w:1},{t:TIMES[1],w:1},{t:'TEA',brk:true},
+    {t:TIMES[2],w:1},{t:TIMES[3],w:1},{t:'LUNCH',brk:true},
+    {t:TIMES[4],w:1},{t:TIMES[5],w:1},{t:TIMES[6],w:1}
+  ];
+  headers.forEach(h=>{
+    if(h.brk) thead += `<th class="brk">${h.t}</th>`;
+    else thead += `<th class="time">${h.t}</th>`;
+  });
+  thead += '</tr>';
+  table.innerHTML = thead;
+
+  DAYS.forEach((day, di)=>{
+    const isToday = day.short === dayOfWeekShort;
+    const holiday = isTodayHoliday(day.short);
+    let row = `<tr class="${isToday?'today':''} ${holiday?'holiday-row':''}"><td class="daylabel">
+      <div class="daylabel-wrap">
+        <span>${day.name}</span>
+        <button class="holiday-btn ${holiday?'active':''}" onclick="toggleHoliday('${day.short}')">${holiday ? '🏖 Holiday' : 'Mark holiday'}</button>
+      </div>
+    </td>`;
+    row += renderGroup(day, 'A', di);
+    row += `<td class="brkcell"></td>`;
+    row += renderGroup(day, 'B', di);
+    row += `<td class="brkcell"></td>`;
+    row += renderGroup(day, 'C', di);
+    row += '</tr>';
+    table.innerHTML += row;
+  });
+}
+
+function renderGroup(day, groupKey, dayIdx){
+  let html = '';
+  const holiday = isTodayHoliday(day.short);
+  day[groupKey].forEach((block, bi)=>{
+    const cellId = `${day.short}-${groupKey}-${bi}`;
+    const isFree = block.k === 'free';
+    const course = isFree ? null : COURSES[block.k];
+    const cls = isFree ? 'free' : course.cls;
+    const tag = isFree ? 'Free' : course.tag;
+
+    if(holiday){
+      const tooltip = `<div class="tooltip"><b>Holiday</b>Marked as a college holiday today.</div>`;
+      html += `<td class="cell holiday" colspan="${block.s}" onclick="openModal('${cellId}','${day.name}','${block.k}')">
+        <div class="tag">🏖 Holiday</div>
+        <div class="sub">${isFree ? 'No note needed' : course.code}</div>
+        ${tooltip}
+      </td>`;
+      return;
+    }
+
+    let markHtml = '';
+    let noteDot = '';
+    if(!isFree){
+      const rec = getTodayAttendance(cellId);
+      if(rec === 'present') markHtml = '<div class="mark">✓</div>';
+      else if(rec === 'absent') markHtml = '<div class="mark">✕</div>';
+    } else {
+      if(hasTodayNote(cellId)) noteDot = '<div class="note-dot"></div>';
+    }
+
+    const tooltip = isFree
+      ? `<div class="tooltip"><b>Free hour</b>Tap to log what you did.</div>`
+      : `<div class="tooltip"><b>${course.name}</b>${course.code} · ${course.faculty}</div>`;
+
+    html += `<td class="cell ${cls}" colspan="${block.s}" onclick="openModal('${cellId}','${day.name}','${block.k}')">
+      <div class="tag">${tag}</div>
+      ${isFree ? '<div class="plus">+ note</div>' : `<div class="sub">${course.code}</div>`}
+      ${markHtml}${noteDot}
+      ${tooltip}
+    </td>`;
+  });
+  return html;
+}
+
+// ---------- storage helpers ----------
+async function loadJSON(key){
+  try{
+    const r = await window.storage.get(key, false);
+    return r ? JSON.parse(r.value) : [];
+  }catch(e){ return []; }
+}
+async function saveJSON(key, arr){
+  try{ await window.storage.set(key, JSON.stringify(arr), false); }catch(e){ console.error(e); }
+}
+
+const attendanceCache = {};
+const notesCache = {};
+const holidayCache = {};
+
+function isTodayHoliday(dayShort){
+  const arr = holidayCache[dayShort];
+  return !!(arr && arr.includes(todayStr));
+}
+
+async function toggleHoliday(dayShort){
+  let arr = holidayCache[dayShort] || [];
+  if(arr.includes(todayStr)){
+    arr = arr.filter(d=>d!==todayStr);
+  } else {
+    arr = [todayStr, ...arr];
+  }
+  holidayCache[dayShort] = arr;
+  await saveJSON('holiday:'+dayShort, arr);
+  buildGrid();
+}
+
+function getTodayAttendance(cellId){
+  const arr = attendanceCache[cellId];
+  if(!arr) return null;
+  const rec = arr.find(r=>r.date===todayStr);
+  return rec ? rec.status : null;
+}
+function hasTodayNote(cellId){
+  const arr = notesCache[cellId];
+  if(!arr) return false;
+  return arr.some(r=>r.date===todayStr);
+}
+
+async function prefetchAll(){
+  for(const day of DAYS){
+    holidayCache[day.short] = await loadJSON('holiday:'+day.short);
+    for(const g of ['A','B','C']){
+      for(let bi=0; bi<day[g].length; bi++){
+        const block = day[g][bi];
+        const cellId = `${day.short}-${g}-${bi}`;
+        if(block.k==='free'){
+          notesCache[cellId] = await loadJSON('note:'+cellId);
+        } else {
+          attendanceCache[cellId] = await loadJSON('att:'+cellId);
+        }
+      }
+    }
+  }
+  buildGrid();
+}
+
+// ---------- modal ----------
+let currentCell = null;
+
+function openModal(cellId, dayName, courseKey){
+  currentCell = {cellId, dayName, courseKey};
+  const overlay = document.getElementById('overlay');
+  const modal = document.getElementById('modal');
+  overlay.classList.add('open');
+
+  const dayShort = cellId.split('-')[0];
+  if(isTodayHoliday(dayShort)){
+    modal.innerHTML = `
+      <button class="close" onclick="closeModal()">✕</button>
+      <h2>🏖 ${dayName} is a holiday</h2>
+      <div class="code">Marked for ${todayStr}</div>
+      <div class="faculty">No attendance or notes are needed for this day. Unmark it if college was actually on.</div>
+      <button class="save-btn" onclick="toggleHoliday('${dayShort}'); closeModal();">Unmark holiday</button>
+    `;
+    return;
+  }
+
+  if(courseKey === 'free'){
+    const notes = notesCache[cellId] || [];
+    const todayNote = notes.find(n=>n.date===todayStr);
+    modal.innerHTML = `
+      <button class="close" onclick="closeModal()">✕</button>
+      <h2>${dayName} — Free hour</h2>
+      <div class="code">Unscheduled time</div>
+      <div class="faculty">You must log what you used this hour for.</div>
+      <textarea id="noteInput" placeholder="e.g. Revised ML notes, worked on project report...">${todayNote ? todayNote.text : ''}</textarea>
+      <div class="req">Required before saving today's entry</div>
+      <button class="save-btn" id="saveNoteBtn" disabled>Save today's note</button>
+      <div class="saved-msg" id="savedMsg"></div>
+      <div class="past-notes" id="pastNotes"></div>
+    `;
+    const ta = document.getElementById('noteInput');
+    const btn = document.getElementById('saveNoteBtn');
+    const toggle = ()=>{ btn.disabled = ta.value.trim().length === 0; };
+    ta.addEventListener('input', toggle);
+    toggle();
+    btn.onclick = async ()=>{
+      const text = ta.value.trim();
+      if(!text) return;
+      let arr = notesCache[cellId] || [];
+      arr = arr.filter(n=>n.date!==todayStr);
+      arr.unshift({date:todayStr, text});
+      notesCache[cellId] = arr;
+      await saveJSON('note:'+cellId, arr);
+      document.getElementById('savedMsg').textContent = 'Saved ✓';
+      renderPastNotes(cellId);
+      buildGrid();
+    };
+    renderPastNotes(cellId);
+  } else {
+    const course = COURSES[courseKey];
+    const arr = attendanceCache[cellId] || [];
+    const presentCount = arr.filter(r=>r.status==='present').length;
+    const absentCount = arr.filter(r=>r.status==='absent').length;
+    const todayStatus = getTodayAttendance(cellId);
+    modal.innerHTML = `
+      <button class="close" onclick="closeModal()">✕</button>
+      <h2>${course.name}</h2>
+      <div class="code">${course.code} · ${dayName}</div>
+      <div class="faculty"><b>Faculty</b>${course.faculty}</div>
+      <div class="stats">
+        <div class="stat pres"><b id="presCount">${presentCount}</b><span>PRESENT</span></div>
+        <div class="stat abs"><b id="absCount">${absentCount}</b><span>ABSENT</span></div>
+      </div>
+      <div class="attn-row">
+        <button class="btn present ${todayStatus==='present'?'active':''}" id="btnPresent">Present today</button>
+        <button class="btn absent ${todayStatus==='absent'?'active':''}" id="btnAbsent">Absent today</button>
+      </div>
+      <div class="stamp" id="stamp"></div>
+    `;
+    document.getElementById('btnPresent').onclick = ()=>markAttendance(cellId, 'present');
+    document.getElementById('btnAbsent').onclick = ()=>markAttendance(cellId, 'absent');
+  }
+}
+
+function renderPastNotes(cellId){
+  const box = document.getElementById('pastNotes');
+  if(!box) return;
+  const arr = (notesCache[cellId]||[]).filter(n=>n.date!==todayStr);
+  if(arr.length===0){ box.innerHTML = ''; return; }
+  box.innerHTML = '<div style="font-size:.6rem;color:var(--chalk-dim);letter-spacing:1px;margin-bottom:6px;">PAST ENTRIES</div>' +
+    arr.slice(0,8).map(n=>`<div class="entry"><b>${n.date}</b>${escapeHtml(n.text)}</div>`).join('');
+}
+
+function escapeHtml(s){
+  const d = document.createElement('div');
+  d.innerText = s;
+  return d.innerHTML;
+}
+
+async function markAttendance(cellId, status){
+  let arr = attendanceCache[cellId] || [];
+  arr = arr.filter(r=>r.date!==todayStr);
+  arr.unshift({date:todayStr, status});
+  attendanceCache[cellId] = arr;
+  await saveJSON('att:'+cellId, arr);
+
+  // update UI
+  document.getElementById('presCount').textContent = arr.filter(r=>r.status==='present').length;
+  document.getElementById('absCount').textContent = arr.filter(r=>r.status==='absent').length;
+  document.getElementById('btnPresent').classList.toggle('active', status==='present');
+  document.getElementById('btnAbsent').classList.toggle('active', status==='absent');
+
+  const stamp = document.getElementById('stamp');
+  stamp.className = 'stamp ' + (status==='present' ? 'p' : 'a');
+  stamp.textContent = status==='present' ? '✓ PRESENT' : '✕ ABSENT';
+  stamp.classList.remove('show');
+  void stamp.offsetWidth;
+  stamp.classList.add('show');
+  setTimeout(()=>stamp.classList.remove('show'), 900);
+
+  buildGrid();
+}
+
+function closeModal(){
+  document.getElementById('overlay').classList.remove('open');
+  currentCell = null;
+}
+document.getElementById('overlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'overlay') closeModal();
+});
+
+prefetchAll();
+</script>
+</body>
+</html>
+    writing-mode:vertical-rl;
+    text-orientation:mixed;
+    letter-spacing:1px;
+    padding:8px 2px;
+  }
+  td.brkcell{
+    background:repeating-linear-gradient(135deg,rgba(255,255,255,.02) 0 6px,rgba(255,255,255,.05) 6px 12px);
+  }
+  td.daylabel{
+    font-family:'Kalam',cursive;
+    font-weight:700;
+    font-size:1.05rem;
+    background:rgba(255,255,255,.03);
+    white-space:nowrap;
+    padding:0 10px;
+  }
+  tr.today td.daylabel{color:var(--yellow);}
+  tr.today{outline:1px solid rgba(232,196,104,.35);}
+  .daylabel-wrap{display:flex;align-items:center;justify-content:space-between;gap:6px;}
+  .holiday-btn{
+    border:1px dashed rgba(242,239,230,.35);
+    background:transparent;
+    color:var(--chalk-dim);
+    font-family:'Space Mono',monospace;
+    font-size:.6rem;
+    letter-spacing:.5px;
+    padding:4px 6px;
+    border-radius:5px;
+    cursor:pointer;
+    white-space:nowrap;
+    flex-shrink:0;
+  }
+  .holiday-btn:hover{color:var(--chalk);border-color:var(--chalk);}
+  .holiday-btn.active{
+    background:var(--yellow);
+    border-color:var(--yellow);
+    color:#2a2410;
+    font-weight:700;
+  }
+  tr.holiday-row{opacity:.85;}
+  .cell.holiday{
+    background:repeating-linear-gradient(135deg, rgba(232,196,104,.06) 0 8px, rgba(232,196,104,.13) 8px 16px);
+    color:var(--yellow);
+  }
+  .cell.holiday .tag{color:var(--yellow);}
+  .cell .mark.holiday-mark{font-size:.68rem;}
+  .cell{
+    position:relative;
+    height:78px;
+    cursor:pointer;
+    padding:6px 4px;
+    transition:background .15s ease;
+  }
+  .cell:hover{background:rgba(255,255,255,.06);}
+  .cell.free{color:var(--chalk-dim);}
+  .cell .tag{
+    font-family:'Kalam',cursive;
+    font-weight:700;
+    font-size:1rem;
+  }
+  .cell.class-ml .tag,.cell.class-ml-lab .tag{color:#9fd6a6;}
+  .cell.class-spm .tag{color:var(--yellow);}
+  .cell.class-sta-tut .tag,.cell.class-sta-lab .tag,.cell.class-sta .tag{color:var(--blue);}
+  .cell.class-cc-lab .tag,.cell.class-cc-tut .tag{color:#e0a1c9;}
+  .cell.class-placement .tag{color:#f2b880;}
+  .cell.class-project .tag{color:#d9d16a;}
+  .cell .sub{
+    font-size:.6rem;
+    color:var(--chalk-dim);
+    margin-top:2px;
+  }
+  .cell .mark{
+    position:absolute;
+    top:2px;
+    right:4px;
+    font-size:.85rem;
+  }
+  .cell .note-dot{
+    position:absolute;
+    bottom:6px;
+    right:6px;
+    width:7px;height:7px;
+    border-radius:50%;
+    background:var(--blue);
+    box-shadow:0 0 6px var(--blue);
+  }
+  .cell .plus{
+    font-size:.65rem;
+    color:rgba(242,239,230,.35);
+  }
+
+  /* tooltip */
+  .tooltip{
+    position:absolute;
+    z-index:40;
+    bottom:100%;
+    left:50%;
+    transform:translate(-50%,-8px);
+    background:var(--chalk);
+    color:var(--board-dark);
+    padding:8px 10px;
+    border-radius:5px;
+    font-size:.68rem;
+    line-height:1.35;
+    width:200px;
+    box-shadow:0 6px 18px rgba(0,0,0,.4);
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .12s ease;
+  }
+  .cell:hover .tooltip{opacity:1;}
+  .tooltip b{display:block;font-family:'Kalam',cursive;font-size:.85rem;margin-bottom:2px;}
+
+  /* modal */
+  .overlay{
+    position:fixed;inset:0;
+    background:rgba(10,16,11,.72);
+    display:none;
+    align-items:center;justify-content:center;
+    z-index:100;
+    padding:20px;
+  }
+  .overlay.open{display:flex;}
+  .modal{
+    background:var(--board);
+    border:2px solid #0f2015;
+    border-radius:10px;
+    max-width:380px;
+    width:100%;
+    padding:22px 22px 20px;
+    box-shadow:0 20px 50px rgba(0,0,0,.5);
+    position:relative;
+  }
+  .modal h2{
+    font-family:'Kalam',cursive;
+    margin:0 0 2px;
+    font-size:1.4rem;
+  }
+  .modal .code{
+    color:var(--chalk-dim);
+    font-size:.7rem;
+    letter-spacing:1px;
+    margin-bottom:14px;
+  }
+  .modal .faculty{
+    font-size:.8rem;
+    color:var(--chalk-dim);
+    margin-bottom:16px;
+    line-height:1.5;
+  }
+  .modal .faculty b{color:var(--chalk);display:block;font-family:'Kalam',cursive;font-size:.9rem;margin-bottom:2px;}
+  .close{
+    position:absolute;top:12px;right:14px;
+    background:none;border:none;color:var(--chalk-dim);
+    font-size:1.1rem;cursor:pointer;
+  }
+  .stats{
+    display:flex;gap:10px;margin-bottom:16px;
+  }
+  .stat{
+    flex:1;
+    background:rgba(255,255,255,.04);
+    border:1px dashed rgba(242,239,230,.2);
+    border-radius:6px;
+    text-align:center;
+    padding:8px 4px;
+  }
+  .stat b{display:block;font-size:1.2rem;font-family:'Kalam',cursive;}
+  .stat.pres b{color:#9fd6a6;}
+  .stat.abs b{color:var(--red);}
+  .stat span{font-size:.6rem;color:var(--chalk-dim);letter-spacing:.5px;}
+  .attn-row{display:flex;gap:10px;}
+  .btn{
+    flex:1;
+    padding:11px 8px;
+    border-radius:6px;
+    border:2px solid transparent;
+    font-family:'Kalam',cursive;
+    font-weight:700;
+    font-size:.95rem;
+    cursor:pointer;
+    transition:transform .1s ease;
+  }
+  .btn:active{transform:scale(.96);}
+  .btn.present{background:rgba(159,214,166,.15);border-color:#9fd6a6;color:#9fd6a6;}
+  .btn.present.active{background:#9fd6a6;color:#12241a;}
+  .btn.absent{background:rgba(217,105,90,.15);border-color:var(--red);color:var(--red);}
+  .btn.absent.active{background:var(--red);color:#2a120e;}
+  .stamp{
+    position:absolute;
+    top:40%;left:50%;
+    transform:translate(-50%,-50%) scale(1.5) rotate(-10deg);
+    font-family:'Kalam',cursive;
+    font-weight:700;
+    font-size:1.6rem;
+    border:3px solid;
+    padding:6px 14px;
+    border-radius:8px;
+    opacity:0;
+    pointer-events:none;
+    transition:transform .25s cubic-bezier(.3,1.6,.4,1), opacity .25s ease;
+  }
+  .stamp.show{opacity:.92;transform:translate(-50%,-50%) scale(1) rotate(-10deg);}
+  .stamp.p{color:#9fd6a6;border-color:#9fd6a6;}
+  .stamp.a{color:var(--red);border-color:var(--red);}
+
+  .modal textarea{
+    width:100%;
+    min-height:90px;
+    background:rgba(0,0,0,.25);
+    border:1px dashed rgba(242,239,230,.3);
+    border-radius:6px;
+    color:var(--chalk);
+    font-family:'Space Mono',monospace;
+    font-size:.82rem;
+    padding:10px;
+    resize:vertical;
+  }
+  .modal .req{
+    font-size:.62rem;
+    color:var(--yellow);
+    margin:6px 0 12px;
+    letter-spacing:.5px;
+  }
+  .save-btn{
+    width:100%;
+    padding:12px;
+    border-radius:6px;
+    border:none;
+    background:var(--yellow);
+    color:#2a2410;
+    font-family:'Kalam',cursive;
+    font-weight:700;
+    font-size:1rem;
+    cursor:pointer;
+  }
+  .save-btn:disabled{opacity:.35;cursor:not-allowed;}
+  .past-notes{
+    margin-top:16px;
+    max-height:130px;
+    overflow-y:auto;
+    border-top:1px dashed rgba(242,239,230,.2);
+    padding-top:10px;
+  }
+  .past-notes .entry{
+    font-size:.68rem;
+    color:var(--chalk-dim);
+    margin-bottom:8px;
+  }
+  .past-notes .entry b{color:var(--chalk);display:block;font-size:.62rem;letter-spacing:.5px;}
+  .saved-msg{
+    font-size:.68rem;
+    color:#9fd6a6;
+    margin-top:8px;
+    height:14px;
+  }
+  footer{
+    text-align:center;
+    color:var(--chalk-dim);
+    font-size:.65rem;
+    margin-top:22px;
+    letter-spacing:.5px;
+  }
+</style>
+</head>
+<body>
+
+<div class="rail"></div>
+<div class="frame">
+  <header>
+    <h1>III MCA — Class Register</h1>
+    <div class="sub">Term 24/08/2026 – 17/12/2026 · Selected subjects only</div>
+  </header>
+
+  <div class="legend">
+    <span><i class="dot" style="background:#9fd6a6"></i> Machine Learning</span>
+    <span><i class="dot" style="background:#e8c468"></i> Project Mgmt</span>
+    <span><i class="dot" style="background:#86b0d1"></i> Testing &amp; Automation</span>
+    <span><i class="dot" style="background:#e0a1c9"></i> Cloud Computing</span>
+    <span><i class="dot" style="background:#f2b880"></i> Placement</span>
+    <span><i class="dot" style="background:#d9d16a"></i> Project Phase I</span>
+    <span><i class="dot" style="background:#6b7568"></i> Free — note required</span>
+  </div>
+
+  <div class="board">
+    <table id="grid"></table>
+  </div>
+
+  <footer>Tap a class to mark attendance · Tap a free hour to log what you did · Data is stored privately on this device</footer>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="modal" id="modal"></div>
+</div>
+
+<script>
+const COURSES = {
+  ml:        {code:'25MCA31',   name:'Machine Learning',                         faculty:'Ms. Swathi M (SM) / Dr. Shazia Mannan (SZ)', tag:'ML',        cls:'class-ml'},
+  'ml-lab':  {code:'25MCA31',   name:'Machine Learning — Lab',                   faculty:'Ms. Swathi M (SM), Dr. Shazia Mannan (SZ) & team', tag:'ML Lab', cls:'class-ml-lab'},
+  spm:       {code:'25MCASS1',  name:'Software Project Management',              faculty:'Dr. Ajitha S (SA)', tag:'SPM', cls:'class-spm'},
+  'sta-tut': {code:'25MCASS2',  name:'Software Testing &amp; Automation — Tutorial', faculty:'Ms. Sahana (SH)', tag:'STA', cls:'class-sta-tut'},
+  'sta-lab': {code:'25MCASS2',  name:'Software Testing &amp; Automation — Lab',      faculty:'Ms. Sahana (SH), Ms. Savitha K (SK), Prof. RCN', tag:'STA Lab', cls:'class-sta-lab'},
+  sta:       {code:'25MCASS2',  name:'Software Testing &amp; Automation',            faculty:'Ms. Sahana (SH), Ms. Savitha K (SK), Prof. RCN', tag:'STA', cls:'class-sta'},
+  'cc-lab':  {code:'25MCASS3',  name:'Cloud Computing — Lab',                    faculty:'Ms. Savitha K (SK), Dr. Komala R (KR), Dr. Shazia Mannan (SZ)', tag:'CC Lab', cls:'class-cc-lab'},
+  'cc-tut':  {code:'25MCASS3',  name:'Cloud Computing — Tutorial',               faculty:'Ms. Savitha K (SK)', tag:'CC', cls:'class-cc-tut'},
+  placement: {code:'—',          name:'Placement Activity',                       faculty:'Placement Cell', tag:'Placement', cls:'class-placement'},
+  project:   {code:'24MCAP1',   name:'Project Work – Phase I',                   faculty:'All Faculty', tag:'Project', cls:'class-project'}
+};
+
+const TIMES = ['9:00–9:55','9:55–10:50','11:05–12:00','12:00–12:55','1:45–2:40','2:40–3:35','3:35–4:30'];
+
+// groups: A = slots 1-2, break(TEA), B = slots 3-4, break(LUNCH), C = slots 5-7
+const DAYS = [
   {name:'Monday', short:'Mon', A:[{s:1,k:'free'},{s:1,k:'ml'}],            B:[{s:1,k:'free'},{s:1,k:'cc-lab'}], C:[{s:2,k:'placement'},{s:1,k:'free'}]},
   {name:'Tuesday',short:'Tue', A:[{s:2,k:'sta-tut'}],                      B:[{s:1,k:'spm'},{s:1,k:'ml'}],       C:[{s:3,k:'free'}]},
   {name:'Wednesday',short:'Wed',A:[{s:1,k:'ml'},{s:1,k:'spm'}],            B:[{s:2,k:'cc-tut'}],                 C:[{s:2,k:'placement'},{s:1,k:'free'}]},
